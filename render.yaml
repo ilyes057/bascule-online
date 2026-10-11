@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bascule-online
+    runtime: node
+    plan: free
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+# For durable saves, add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+# as secret environment variables in the Render Dashboard.
