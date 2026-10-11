@@ -167,25 +167,25 @@ function pass(playerId) {
  advance();return event;
 }
 function advance(){
- if(s.turn+1<s.players.length){s.turn++;s.players[s.turn].actions=3;return;}
+ const next=s.players.find(p=>p.id>s.turn&&!p.retired);if(next){s.turn=next.id;next.actions=3;return;}
  if([4,8,12].includes(s.round)) {
   s.pendingAuction=true;s.auctionIndex++;
   const choices=AWARDS.filter(x=>!s.players.some(p=>p.perks.includes(x.id)));
   s.auctionItem=choices[rnd(choices.length)]||null;
-  s.auctionBids={};
+  s.auctionBids=Object.fromEntries(s.players.filter(p=>p.retired).map(p=>[p.id,0]));
   return;
  }
  goNextRound();
 }
 function goNextRound(){
- if(s.round>=14){s.over=true;s.winner=[...s.players].sort((a,b)=>b.vp-a.vp||b.inf-a.inf)[0].id;return;}
- s.round++;refreshEra();s.turn=0;
+ if(s.round>=14){s.over=true;s.winner=[...s.players].filter(p=>!p.retired).sort((a,b)=>b.vp-a.vp||b.inf-a.inf)[0]?.id??0;return;}
+ s.round++;refreshEra();s.turn=s.players.find(p=>!p.retired)?.id??0;
  const remaining=s.districts.map((d,i)=>!d.done?i:-1).filter(i=>i>=0);
  s.anomaly=remaining.length?(remaining.find(i=>i>s.anomaly)??remaining[0]):-1;
  for(let p of s.players){p.actions=3;p.used=[];p.lastTag=null;p.types=[];}
 }
 function bid(playerId,amount){
- if(!s.pendingAuction||s.over||!Number.isSafeInteger(amount)||amount<0||s.auctionBids[playerId]!==undefined||!s.players[playerId]||amount>s.players[playerId].inf)return null;
+ if(!s.pendingAuction||s.over||s.players[playerId]?.retired||!Number.isSafeInteger(amount)||amount<0||s.auctionBids[playerId]!==undefined||!s.players[playerId]||amount>s.players[playerId].inf)return null;
  s.auctionBids[playerId]=amount;
  if(Object.keys(s.auctionBids).length===s.players.length){
   const bids=s.players.map(p=>s.auctionBids[p.id]);
@@ -198,7 +198,19 @@ function bid(playerId,amount){
  }
  return {kind:'bid',actor:playerId,round:s.round,info:{}};
 }
+// Leaving permanently retires the player's seat, without changing any machine or project rules.
+function resign(playerId){
+ if(!s.players[playerId]||s.players[playerId].retired)return null;
+ const wasTurn=s.turn===playerId;
+ // A departing player automatically passes an unfinished sealed bid.
+ if(s.pendingAuction&&s.auctionBids[playerId]===undefined)bid(playerId,0);
+ const p=s.players[playerId];p.retired=true;p.actions=0;p.types=[];p.used=[];
+ const active=s.players.filter(x=>!x.retired);
+ if(!s.over&&active.length<=1){s.over=true;s.pendingAuction=false;s.winner=active[0]?.id??playerId;}
+ else if(!s.over&&!s.pendingAuction&&wasTurn)advance();
+ return {kind:'retire',actor:playerId,round:s.round,info:{}};
+}
 function exportCatalog(){return {machines:M,contracts:C,awards:AWARDS,stages:STAGE_DEFS,projects:DISTRICT_DEFS,families:FAMILIES};}
-return {create,state,move,pass,bid,exportCatalog};
+return {create,state,move,pass,bid,resign,exportCatalog};
 }
 module.exports={createEngine};

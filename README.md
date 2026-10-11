@@ -126,3 +126,13 @@ Le chat des salons fait partie de l'état sauvegardé. C'est un premier stockage
 Ce dépôt est un **premier jeu en ligne fonctionnel**, non un service public terminé. Avant de l'ouvrir à beaucoup de joueurs, il faudra en particulier ajouter des timers/abandons pour les joueurs déconnectés, une solution TURN pour la voix, un système de sauvegarde et reconnexion validé sous charges réelles, une modération du chat, des protections contre spam/flood, des tests humains d'ergonomie et un audit de sécurité. L'application utilise une implémentation légère des WebSocket pour éviter les dépendances, à remplacer idéalement par une bibliothèque maintenue pour un déploiement de production à grande échelle.
 
 Le jeu requiert une connexion Internet pour les parties distantes et **ne joue pas hors ligne** ; l'icône PWA permet seulement de l'ajouter à l'écran d'accueil du téléphone selon les possibilités du navigateur.
+
+
+## Mise à jour v0.2 : chat, vocal, sortie
+
+- **Entrée** ouvre le chat lorsque le focus n'est pas dans un champ ou un bouton. Entrée dans le champ envoie le message.
+- **↩ Quitter la partie** apparaît dans l'en-tête (également dans le menu mobile) : confirmation, retour à l'accueil. Avant le lancement, libère une place dans le salon. Pendant une partie, abandonne la place de façon permanente ; les autres peuvent finir sans être bloqués.
+- **Vocal** : le serveur partage désormais les membres actifs du canal, y compris aux derniers arrivés ; l'interface indique l'état de connexion, et propose de réessayer ou de réactiver le son lorsque le navigateur bloque la lecture.
+- **Important WebRTC** : le STUN existant reste gratuit, mais certains réseaux mobiles/entreprises imposent un relais TURN. Sans TURN configuré, nous ne garantissons pas le fonctionnement du vocal entre tous les réseaux. Tester à deux appareils réels sur HTTPS.
+
+Pour déployer : remplacer les fichiers du dépôt GitHub par ceux de cette archive, faire un commit puis pousser sur `main`. Render (déploiement automatique activé) récupère la mise à jour. Tester dans un nouveau salon après redéploiement.

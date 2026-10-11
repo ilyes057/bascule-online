@@ -43,3 +43,21 @@ test('two browsers: create, join, chat, move sync, reject illegal move and recon
   assert(restored.events.some(e=>e.event.kind==='gather'));
  }finally{a?.close();b?.close();rejoined?.close();proc.kill('SIGTERM');await delay(150);rmSync(folder,{recursive:true,force:true})}
 });
+test('voluntary leave: lobby seat released, player seat shifted, voice presence synchronized',async()=>{
+ const port=39700+Math.floor(Math.random()*200),folder=mkdtempSync(path.join(os.tmpdir(),'bascule-leave-'));
+ const proc=spawn(process.execPath,['server.js'],{cwd:path.join(__dirname,'..'),env:{...process.env,PORT:String(port),DATA_FILE:path.join(folder,'rooms.json')},stdio:'ignore'});
+ let a,b,c;
+ try{
+  for(let j=0;j<40;j++){try{if((await fetch(`http://127.0.0.1:${port}/healthz`)).ok)break}catch{}await delay(70)}
+  a=new Peer(`ws://127.0.0.1:${port}/ws`);await a.ready();a.send({type:'create',name:'Alice'});const join=await a.wait(m=>m.type==='joined');
+  b=new Peer(`ws://127.0.0.1:${port}/ws`);await b.ready();b.send({type:'join',name:'Bob',code:join.code});await b.wait(m=>m.type==='joined');
+  c=new Peer(`ws://127.0.0.1:${port}/ws`);await c.ready();c.send({type:'join',name:'Cara',code:join.code});await c.wait(m=>m.type==='joined');
+  a.send({type:'voice-presence',enabled:true});b.send({type:'voice-presence',enabled:true});
+  const members=await c.wait(m=>m.type==='voice-members'&&m.members.length===2);assert.deepEqual(members.members.sort(),[0,1]);
+  b.send({type:'leave'});await b.wait(m=>m.type==='left');
+  const shifted=await c.wait(m=>m.type==='seat'&&m.playerId===1);assert.equal(shifted.playerId,1);
+  const reduced=await a.wait(m=>m.type==='state'&&m.players.length===2&&m.players[1].name==='Cara');assert.equal(reduced.players[1].name,'Cara');
+  assert.deepEqual((await a.wait(m=>m.type==='voice-members'&&m.members.length===1)).members,[0]);
+  a.send({type:'start'});assert.equal((await c.wait(m=>m.type==='state'&&m.phase==='playing')).game.players.length,2);
+ }finally{a?.close();b?.close();c?.close();proc.kill('SIGTERM');await delay(110);rmSync(folder,{recursive:true,force:true})}
+});

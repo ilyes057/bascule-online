@@ -20,13 +20,14 @@ function send(c,msg){if(c.socket.destroyed)return;let payload=Buffer.from(JSON.s
 function control(c,opcode,data=Buffer.alloc(0)){if(c.socket.destroyed)return;c.socket.write(Buffer.concat([Buffer.from([0x80|opcode,data.length]),data]));}
 function broadcast(room,msg){for(const c of clients)if(c.code===room.code&&c.playerId!==null)send(c,msg);}
 function current(room){return room.engine?room.engine.state():null;}
-function playerView(room,id){const game=current(room);return {type:'state',code:room.code,phase:game?(game.over?'finished':game.pendingAuction?'auction':'playing'):'lobby',you:id,host:room.host,players:room.players.map((p,i)=>({id:i,name:p.name,online:!!p.online,host:i===room.host})),game:game?{...game,auctionBids:game.pendingAuction?Object.keys(game.auctionBids||{}).map(Number):[]}:null,chat:room.chat.slice(-35),events:(room.events||[]).slice(-45)};}
+function playerView(room,id){const game=current(room);return {type:'state',code:room.code,phase:game?(game.over?'finished':game.pendingAuction?'auction':'playing'):'lobby',you:id,host:room.host,players:room.players.map((p,i)=>({id:i,name:p.name,online:!!p.online,host:i===room.host})),game:game?{...game,auctionBids:game.pendingAuction?Object.keys(game.auctionBids||{}).map(Number):[]}:null,chat:room.chat.slice(-35),voiceMembers:[...(room.voiceMembers||[])],events:(room.events||[]).slice(-45)};}
+function broadcastVoice(room){broadcast(room,{type:'voice-members',members:[...(room.voiceMembers||[])]});}
 function sync(room){room.touched=Date.now();for(const c of clients)if(c.code===room.code&&c.playerId!==null)send(c,playerView(room,c.playerId));scheduleSave();}
 function emitEvent(room,event){if(!event)return;room.eventId++;room.events=room.events||[];room.events.push({id:room.eventId,event});if(room.events.length>55)room.events.shift();broadcast(room,{type:'event',id:room.eventId,event});room.touched=Date.now();scheduleSave();}
 function snapshot(game){return game?.players?.map(p=>({id:p.id,r:{...p.r},inf:p.inf,vp:p.vp,machines:p.machines.length}))||[];}
 function impact(before,game){return snapshot(game).map(p=>{const b=before.find(x=>x.id===p.id);if(!b)return null;const r=Object.fromEntries(['m','e','c','v'].map(k=>[k,(p.r[k]||0)-(b.r[k]||0)]).filter(([k,v])=>v));const inf=p.inf-b.inf,vp=p.vp-b.vp,machines=p.machines-b.machines;if(!Object.keys(r).length&&!inf&&!vp&&!machines)return null;return {player:p.id,r,inf,vp,machines};}).filter(Boolean);} 
 function attach(c,room,id,token){for(const other of clients)if(other!==c&&other.code===room.code&&other.playerId===id){send(other,{type:'replaced'});other.socket.end();other.code=null;other.playerId=null;}
- c.code=room.code;c.playerId=id;c.token=token;room.players[id].online=true;send(c,{type:'joined',code:room.code,token,playerId:id});sync(room);
+ c.code=room.code;c.playerId=id;c.token=token;room.players[id].online=true;room.voiceMembers?.delete(id);broadcastVoice(room);send(c,{type:'joined',code:room.code,token,playerId:id});sync(room);
 }
 function error(c,message){send(c,{type:'error',message});}
 function handle(c,msg){if(!msg||typeof msg!=='object'||Array.isArray(msg))return;
@@ -35,7 +36,7 @@ function handle(c,msg){if(!msg||typeof msg!=='object'||Array.isArray(msg))return
  if(type==='create'){
   if(c.code!==null)return error(c,'Already in a room');
   const code=roomCode(),token=hex(),name=clean(msg.name,22)||'Joueur 1';
-  const room={code,players:[{name,token,online:true}],host:0,engine:null,chat:[],events:[],eventId:0,touched:Date.now()};
+  const room={code,players:[{name,token,online:true}],host:0,engine:null,chat:[],voiceMembers:new Set(),events:[],eventId:0,touched:Date.now()};
   rooms.set(code,room);attach(c,room,0,token);return;
  }
  if(type==='join'){
@@ -75,6 +76,29 @@ function handle(c,msg){if(!msg||typeof msg!=='object'||Array.isArray(msg))return
   if(!room.engine)return error(c,'Game has not started');
   const before=snapshot(current(room));const event=room.engine.bid(c.playerId,msg.amount);if(!event)return error(c,'Invalid bid');event.impact=impact(before,current(room));emitEvent(room,event);sync(room);return;
  }
+ if(type==='leave'){
+  // A voluntary departure releases the lobby seat or retires the game seat.
+  room.voiceMembers?.delete(c.playerId);broadcastVoice(room);
+  const oldId=c.playerId;
+  if(room.engine){
+   const ev=room.engine.resign(oldId);if(ev)emitEvent(room,ev);
+   room.players[oldId].online=false;
+  }else{
+   room.players.splice(oldId,1);
+   if(room.players.length){
+    room.host=room.host===oldId?0:room.host>oldId?room.host-1:room.host;
+    for(const peer of clients)if(peer!==c&&peer.code===room.code&&peer.playerId!==null){
+     if(peer.playerId>oldId){peer.playerId--;send(peer,{type:'seat',playerId:peer.playerId});}
+    }
+    room.voiceMembers=new Set([...room.voiceMembers||[]].filter(id=>id!==oldId).map(id=>id>oldId?id-1:id));
+   }
+  }
+  c.code=null;c.playerId=null;c.token=null;
+  send(c,{type:'left'});
+  if(!room.players.length)rooms.delete(room.code);
+  else{broadcastVoice(room);sync(room);}
+  return;
+ }
  if(type==='chat'){
   const now=Date.now();if(now-(c.lastChat||0)<650)return error(c,'Please slow down');
   const body=clean(msg.body,350);if(!body)return;c.lastChat=now;
@@ -87,10 +111,12 @@ function handle(c,msg){if(!msg||typeof msg!=='object'||Array.isArray(msg))return
   for(const t of clients)if(t.code===room.code&&t.playerId===id)send(t,{type:'signal',from:c.playerId,signal});return;
  }
  if(type==='voice-presence'){
-  broadcast(room,{type:'voice-presence',player:c.playerId,enabled:!!msg.enabled});return;
+  if(!room.voiceMembers)room.voiceMembers=new Set();
+  if(msg.enabled)room.voiceMembers.add(c.playerId);else room.voiceMembers.delete(c.playerId);
+  broadcastVoice(room);return;
  }
 }
-function disconnect(c){clients.delete(c);if(!c.code||c.playerId===null)return;const room=rooms.get(c.code);if(!room)return;const still=[...clients].some(x=>x.code===room.code&&x.playerId===c.playerId);if(!still){room.players[c.playerId].online=false;broadcast(room,{type:'voice-presence',player:c.playerId,enabled:false});sync(room);}}
+function disconnect(c){clients.delete(c);if(!c.code||c.playerId===null)return;const room=rooms.get(c.code);if(!room)return;const still=[...clients].some(x=>x.code===room.code&&x.playerId===c.playerId);if(!still){room.players[c.playerId].online=false;room.voiceMembers?.delete(c.playerId);broadcastVoice(room);sync(room);}}
 function consume(c,buf){c.buffer=Buffer.concat([c.buffer,buf]);while(c.buffer.length>=2){const b=c.buffer;const op=b[0]&15;let n=b[1]&127;const masked=!!(b[1]&128);if(!masked){c.socket.destroy();return;}let off=2;if(n===126){if(b.length<4)return;n=b.readUInt16BE(2);off=4}else if(n===127){if(b.length<10)return;const big=b.readBigUInt64BE(2);if(big>65536n){c.socket.destroy();return;}n=Number(big);off=10;}if(n>65536){c.socket.destroy();return;}if(b.length<off+4+n)return;const mask=b.subarray(off,off+4),data=Buffer.from(b.subarray(off+4,off+4+n));for(let i=0;i<n;i++)data[i]^=mask[i%4];c.buffer=b.subarray(off+4+n);if(op===8){c.socket.end();return;}if(op===9){control(c,10,data);continue;}if(op===10){c.pong=Date.now();continue;}if(op!==1){c.socket.destroy();return;}let obj;try{obj=JSON.parse(data.toString('utf8'))}catch{error(c,'Invalid JSON');continue;}try{handle(c,obj)}catch(err){console.error('action error',err);error(c,'Server error')}}}
 const server=http.createServer((req,res)=>{
  let url;try{url=new URL(req.url,'http://localhost')}catch{res.writeHead(400).end();return;}
@@ -117,9 +143,9 @@ function snapshots(){return [...rooms.values()].map(r=>({code:r.code,host:r.host
 function save(){try{fs.mkdirSync(path.dirname(STORE),{recursive:true});const data=snapshots();fs.writeFileSync(STORE+'.tmp',JSON.stringify(data));fs.renameSync(STORE+'.tmp',STORE);if(cloud.enabled)cloud.save(data).catch(e=>console.error('cloud save:',e.message))}catch(e){console.error('save:',e.message)}}
 let saveTimer=null;
 function scheduleSave(){if(saveTimer)return;saveTimer=setTimeout(()=>{saveTimer=null;save()},2600);saveTimer.unref();}
-try{const restored=JSON.parse(fs.readFileSync(STORE,'utf8'));for(const r of restored){const eng=r.state?createEngine(r.state):null;rooms.set(r.code,{code:r.code,host:r.host,players:r.players,chat:r.chat||[],eventId:r.eventId||0,events:r.events||[],touched:r.touched,engine:eng});}console.log(`restored ${rooms.size} rooms`);}catch{}
+try{const restored=JSON.parse(fs.readFileSync(STORE,'utf8'));for(const r of restored){const eng=r.state?createEngine(r.state):null;rooms.set(r.code,{code:r.code,host:r.host,players:r.players,chat:r.chat||[],eventId:r.eventId||0,events:r.events||[],touched:r.touched,engine:eng,voiceMembers:new Set()});}console.log(`restored ${rooms.size} rooms`);}catch{}
 setInterval(()=>{const now=Date.now();for(const [code,r] of rooms)if(now-r.touched>24*3600*1000&&!r.players.some(p=>p.online))rooms.delete(code);save();for(const c of clients){if(now-c.pong>85000){c.socket.destroy();continue;}control(c,9,Buffer.from('ping'));}},30000).unref();
-(async()=>{if(cloud.enabled){try{const saved=await cloud.load();for(const r of saved||[]){if(Date.now()-(r.touched||0)>24*3600*1000)continue;const prior=rooms.get(r.code);if(prior&&(prior.touched||0)>=(r.touched||0))continue;const engine=r.state?createEngine(r.state):null;rooms.set(r.code,{code:r.code,host:r.host,players:r.players.map(p=>({...p,online:false})),chat:r.chat||[],eventId:r.eventId||0,events:r.events||[],touched:r.touched,engine});}console.log(`Cloud persistence: restored ${saved?.length||0} rooms`)}catch(err){console.error('Cloud persistence unavailable:',err.message)}}
+(async()=>{if(cloud.enabled){try{const saved=await cloud.load();for(const r of saved||[]){if(Date.now()-(r.touched||0)>24*3600*1000)continue;const prior=rooms.get(r.code);if(prior&&(prior.touched||0)>=(r.touched||0))continue;const engine=r.state?createEngine(r.state):null;rooms.set(r.code,{code:r.code,host:r.host,players:r.players.map(p=>({...p,online:false})),chat:r.chat||[],eventId:r.eventId||0,events:r.events||[],touched:r.touched,engine,voiceMembers:new Set()});}console.log(`Cloud persistence: restored ${saved?.length||0} rooms`)}catch(err){console.error('Cloud persistence unavailable:',err.message)}}
  server.listen(PORT,'0.0.0.0',()=>console.log(`BASCULE Online listening at http://localhost:${PORT}`));})();
 function shutdown(){save();server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),1200).unref()}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);

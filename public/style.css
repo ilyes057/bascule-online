@@ -12,3 +12,11 @@
 .deltaChip{display:inline-block;margin:2px 2px 0 0;color:#a8f2d3;background:#184c44;padding:2px 4px;border-radius:4px;font-size:10px;line-height:1.4}.flashImpact{margin-top:5px;max-width:480px}.flashImpact .deltaChip{font-size:12px;padding:3px 7px}
 /* Avoid obscuring tactile machine buttons when optional voice is off. */
 @media(max-width:700px){.mobileVoice{display:none}.mobileVoice.active{display:grid}}
+
+/* Exit control and voice feedback (desktop & mobile). */
+.quitButton{color:#ffd0ba!important;border-color:#ac6565!important;flex-shrink:0}
+.quitButton:hover{background:#612e3d!important}
+.voicePeer.connected small{color:#80edb4}.voicePeer.connecting small{color:#ffd487}.voicePeer.failed small{color:#ff9999}
+.voiceFeedback{margin:12px 0;padding:10px;border:1px solid #3c6779;background:#0b2739;border-radius:10px;font-size:12px}
+.voiceFeedback strong{color:#b9f5dc}.voiceAudioRetry{margin-top:8px;width:100%}
+@media(max-width:700px){.quitButton{min-width:32px;min-height:32px;padding:4px!important}}
